@@ -38,7 +38,7 @@ covering techniques like artificial time pressure, threat of loss,
 authority impersonation, Business Email Compromise patterns, 
 lottery scams, and more.
 
-Link verification — checks every URL against 65,817 verified 
+Link verification : checks every URL against 65,817 verified 
 phishing URLs from PhishTank and runs structural analysis to catch 
 typosquatting (detecting that paypa1.com is impersonating 
 paypal.com), suspicious domains, IP based hostnames, and 
