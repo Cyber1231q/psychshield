@@ -1,0 +1,13 @@
+{
+  "trained_at": "2026-06-22T07:55:58.487116",
+  "accuracy_per_trigger": {
+    "urgency": 96.46,
+    "fear": 86.03,
+    "authority": 87.14,
+    "trust": 91.25,
+    "pity": 94.36
+  },
+  "overall_accuracy": 91.05,
+  "vectorizer_features": 15000,
+  "model_type": "LinearSVC + TF-IDF"
+}

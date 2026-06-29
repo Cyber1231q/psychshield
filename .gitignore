@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+venv/
+env/
+.env
+*.db
+*.sqlite3
+
+# Node
+node_modules/
+.env.local
+
+# Claude Code
+CLAUDE.md
+.claude/
+
+# ML Models (too large for GitHub)
+backend/saved_models/*.joblib
+backend/saved_models/*.pkl
+backend/saved_models/**/*.joblib
+backend/saved_models/**/*.pkl
+backend/saved_models/**/*.json
+
+# Dataset files (too large for GitHub)
+data/phishtank/*.csv
+data/enron/
+*.csv.gz
+verified_online.csv.gz
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+*.log
+.pip_tmp/
+
+# Keep folder structure
+!backend/saved_models/.gitkeep
+!data/phishtank/.gitkeep
+!data/enron/.gitkeep
