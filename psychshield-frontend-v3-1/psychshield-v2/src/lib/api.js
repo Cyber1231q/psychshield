@@ -9,6 +9,7 @@
  *
  * Backend routes this expects (per System Architecture diagram):
  *   POST /api/analyze-email      -> runs the 4-module pipeline
+ *   POST /api/analyze-emails     -> splits one document into multiple emails server-side
  *   GET  /api/emails             -> list analyzed emails (Dashboard)
  *   GET  /api/emails/:id         -> single AnalysisResult (Analysis Interface)
  *   GET  /api/analytics          -> aggregate stats (Admin Panel)
@@ -80,6 +81,16 @@ export const api = {
     request("/api/analyze-email", {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+
+  /** Submit one document containing multiple emails; the backend splits and
+   * analyzes each as a separate entity — used by any client that doesn't
+   * want to pre-split client-side (this UI still does its own splitting
+   * for instant per-chunk progress feedback; see EmailAnalysis.jsx). */
+  analyzeEmails: (document) =>
+    request("/api/analyze-emails", {
+      method: "POST",
+      body: JSON.stringify({ document }),
     }),
 
   /** Fetch paginated list of previously analyzed emails for the Dashboard */

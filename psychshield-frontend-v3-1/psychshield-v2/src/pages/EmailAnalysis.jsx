@@ -1,12 +1,46 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ScanLine, Loader2, Link2, ShieldAlert, Brain, FileText, Upload, Mail, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import TriggerMap from "../components/triggers/TriggerMap";
 import RiskBadge from "../components/ui/RiskBadge";
 import SenderVerification from "../components/ui/SenderVerification";
 import PreClickWarning from "../components/ui/PreClickWarning";
+import GmailConnect from "../components/gmail/GmailConnect";
+import GmailScanPanel from "../components/gmail/GmailScanPanel";
 import { api } from "../lib/api";
 import ScrollReveal from "../components/ui/ScrollReveal";
+
+// Upload safety limits — bound memory/CPU use for a client-side-only
+// parsing pipeline (no backend file endpoint exists; everything here
+// runs in the browser tab) and mirror the backend's own field limits
+// (EmailAnalysisRequest in models/schemas.py) so requests don't fail
+// with an opaque validation error after all the parsing work is done.
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB raw file
+const MAX_EXTRACTED_CHARS = 100000; // extracted text kept in the UI
+const MAX_BODY_CHARS = 50000; // matches EmailAnalysisRequest.body
+const MAX_SENDER_CHARS = 254; // matches EmailAnalysisRequest.sender
+const MAX_DOCX_XML_CHARS = 5_000_000; // guards against a zip-bomb document.xml
+const MAX_PDF_PAGES = 300;
+const MAX_PDF_CHARS = 2_000_000;
+
+function truncateText(text, max = MAX_EXTRACTED_CHARS) {
+  return text.length > max ? text.slice(0, max) : text;
+}
+
+async function readFileSignature(file, numBytes = 8) {
+  const buf = await file.slice(0, numBytes).arrayBuffer();
+  return new Uint8Array(buf);
+}
+
+function isZipSignature(bytes) {
+  // .docx (and any OOXML) file is a ZIP archive: "PK" magic bytes.
+  return bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4b;
+}
+
+function isPdfSignature(bytes) {
+  // "%PDF" magic bytes.
+  return bytes.length >= 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
+}
 
 function parseEmailHeaders(raw) {
   const headers = {};
@@ -220,6 +254,26 @@ function SingleResult({ result, emailText }) {
 }
 
 export default function EmailAnalysis() {
+  const [activeTab, setActiveTab] = useState("paste"); // "paste" | "gmail"
+  const [gmailConnected, setGmailConnected] = useState(false);
+  const [gmailNotice, setGmailNotice] = useState(null); // "connected" | "error" | null
+
+  // Handle redirect back from Google OAuth: /analysis?gmail=connected
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("gmail");
+    if (status === "connected") {
+      setActiveTab("gmail");
+      setGmailConnected(true);
+      setGmailNotice("connected");
+      window.history.replaceState({}, "", window.location.pathname);
+    } else if (status === "error") {
+      setActiveTab("gmail");
+      setGmailNotice("error");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
+
   const [emailText, setEmailText] = useState("");
   const [senderEmail, setSenderEmail] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -246,8 +300,8 @@ export default function EmailAnalysis() {
         setBatchProgress(i + 1);
         try {
           const data = await api.analyzeEmail({
-            body: batchEmails[i].body,
-            sender: batchEmails[i].sender || undefined,
+            body: batchEmails[i].body.slice(0, MAX_BODY_CHARS),
+            sender: batchEmails[i].sender ? batchEmails[i].sender.slice(0, MAX_SENDER_CHARS) : undefined,
           });
           results.push({ ...data, _index: i, _originalBody: batchEmails[i].body });
         } catch (err) {
@@ -257,7 +311,10 @@ export default function EmailAnalysis() {
       setBatchResults(results);
     } else {
       try {
-        const data = await api.analyzeEmail({ body: emailText, sender: senderEmail || undefined });
+        const data = await api.analyzeEmail({
+          body: emailText.slice(0, MAX_BODY_CHARS),
+          sender: senderEmail ? senderEmail.slice(0, MAX_SENDER_CHARS) : undefined,
+        });
         setResult(data);
       } catch (err) {
         console.error("Analysis failed:", err);
@@ -270,9 +327,33 @@ export default function EmailAnalysis() {
     const JSZip = (await import("jszip")).default;
     const buf = await file.arrayBuffer();
     const zip = await JSZip.loadAsync(buf);
-    const docXml = await zip.file("word/document.xml")?.async("string");
-    if (!docXml) throw new Error("No document.xml found");
+    const entry = zip.file("word/document.xml");
+    if (!entry) throw new Error("No document.xml found");
+    const docXml = await entry.async("string");
+    if (docXml.length > MAX_DOCX_XML_CHARS) throw new Error("TOO_LARGE");
     return docXml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  }
+
+  async function extractPdfText(file) {
+    const pdfjsLib = await import("pdfjs-dist");
+    const { default: workerSrc } = await import("pdfjs-dist/build/pdf.worker.mjs?url");
+    pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
+
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    const pageCount = Math.min(pdf.numPages, MAX_PDF_PAGES);
+
+    let text = "";
+    for (let i = 1; i <= pageCount; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      text += content.items.map((item) => item.str).join(" ") + "\n";
+      if (text.length > MAX_PDF_CHARS) {
+        text = text.slice(0, MAX_PDF_CHARS);
+        break;
+      }
+    }
+    return text.trim();
   }
 
   function processFileText(raw) {
@@ -315,15 +396,50 @@ export default function EmailAnalysis() {
     setBatchResults([]);
     setResult(null);
 
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setUploadError(`File is too large (${(file.size / (1024 * 1024)).toFixed(1)} MB). Max allowed size is ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB.`);
+      e.target.value = "";
+      return;
+    }
+
     const name = file.name.toLowerCase();
+    const signature = await readFileSignature(file);
+    const finish = (text) => {
+      processFileText(truncateText(text));
+      if (text.length > MAX_EXTRACTED_CHARS) {
+        setUploadError(`Note: extracted text was truncated to ${MAX_EXTRACTED_CHARS.toLocaleString()} characters.`);
+      }
+    };
 
     if (name.endsWith(".docx")) {
+      if (!isZipSignature(signature)) {
+        setUploadError("This .docx file is corrupted or its content doesn't match a real Word document.");
+        e.target.value = "";
+        return;
+      }
       try {
         const text = await extractDocxText(file);
         if (!text) { setUploadError("Could not extract text from this .docx file."); return; }
-        processFileText(text);
+        finish(text);
+      } catch (err) {
+        setUploadError(err.message === "TOO_LARGE" ? "This document is too large or complex to process." : "Failed to read .docx file. Try saving as .txt instead.");
+      }
+      e.target.value = "";
+      return;
+    }
+
+    if (name.endsWith(".pdf")) {
+      if (!isPdfSignature(signature)) {
+        setUploadError("This .pdf file is corrupted or its content doesn't match a real PDF.");
+        e.target.value = "";
+        return;
+      }
+      try {
+        const text = await extractPdfText(file);
+        if (!text) { setUploadError("Could not extract text from this PDF (it may be scanned/image-only)."); return; }
+        finish(text);
       } catch {
-        setUploadError("Failed to read .docx file. Try saving as .txt instead.");
+        setUploadError("Failed to read PDF file. Try saving as .txt instead.");
       }
       e.target.value = "";
       return;
@@ -331,7 +447,13 @@ export default function EmailAnalysis() {
 
     const allowed = [".eml", ".txt", ".msg", ".mbox"];
     if (!allowed.some((ext) => name.endsWith(ext))) {
-      setUploadError(`Unsupported file type. Upload .eml, .txt, or .docx files. Received: .${name.split(".").pop()}`);
+      setUploadError(`Unsupported file type. Upload .eml, .txt, .msg, .mbox, .docx, or .pdf files. Received: .${name.split(".").pop()}`);
+      e.target.value = "";
+      return;
+    }
+
+    if (isZipSignature(signature) || isPdfSignature(signature)) {
+      setUploadError("This file's content doesn't match its extension. Rename it with the correct extension (.docx or .pdf) and re-upload.");
       e.target.value = "";
       return;
     }
@@ -339,12 +461,15 @@ export default function EmailAnalysis() {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const raw = ev.target.result;
+      // Intentional: detecting binary content disguised as text, not matching literal text.
+      // eslint-disable-next-line no-control-regex
       if (/[\x00-\x08\x0E-\x1F]/.test(raw.slice(0, 500))) {
         setUploadError("This file contains binary data. Please paste the email text directly or save as .txt first.");
         return;
       }
-      processFileText(raw);
+      finish(raw);
     };
+    reader.onerror = () => setUploadError("Failed to read file.");
     reader.readAsText(file);
   }
 
@@ -354,28 +479,76 @@ export default function EmailAnalysis() {
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-12">
-      <div className="mb-8">
+      <div className="mb-6">
         <p className="text-xs font-mono uppercase tracking-wide" style={{ color: "var(--color-accent)" }}>Analysis interface</p>
         <h1 className="mt-2 text-3xl font-bold tracking-tight" style={{ color: "var(--color-text-primary)" }}>
           Decompose an email before you act on it
         </h1>
         <p className="mt-2 max-w-2xl text-sm" style={{ color: "var(--color-text-secondary)" }}>
-          Paste email content or upload a file. Files with multiple emails are automatically split and analyzed individually.
+          Paste email content, upload a file, or connect Gmail to scan your inbox directly.
         </p>
       </div>
 
+      {/* Tab bar */}
+      <div className="flex gap-1 mb-6 p-1 rounded-xl w-fit" style={{ backgroundColor: "var(--color-bg-elevated)" }}>
+        {[
+          { id: "paste", label: "Paste / Upload", icon: FileText },
+          { id: "gmail", label: "Gmail Inbox", icon: Mail },
+        ].map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => setActiveTab(id)}
+            className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all"
+            style={{
+              backgroundColor: activeTab === id ? "var(--color-accent)" : "transparent",
+              color: activeTab === id ? "#fff" : "var(--color-text-secondary)",
+            }}
+          >
+            <Icon size={14} />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Gmail OAuth callback notices */}
+      <AnimatePresence>
+        {gmailNotice === "connected" && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            className="mb-5 flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium"
+            style={{ backgroundColor: "var(--color-risk-low-soft)", color: "var(--color-risk-low)" }}
+          >
+            Gmail connected successfully. You can now scan your inbox below.
+            <button onClick={() => setGmailNotice(null)} className="ml-auto text-xs opacity-60 hover:opacity-100">✕</button>
+          </motion.div>
+        )}
+        {gmailNotice === "error" && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            className="mb-5 flex items-center gap-2 rounded-xl px-4 py-3 text-sm"
+            style={{ backgroundColor: "var(--color-risk-high-soft)", color: "var(--color-risk-high)" }}
+          >
+            <AlertTriangle size={14} />
+            Gmail authorization failed. Please try connecting again.
+            <button onClick={() => setGmailNotice(null)} className="ml-auto text-xs opacity-60 hover:opacity-100">✕</button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── PASTE / UPLOAD TAB ─────────────────────────────────── */}
+      {activeTab === "paste" && (
       <div className="grid gap-6 lg:grid-cols-[1fr_1fr] lg:items-start">
         {/* INPUT PANEL */}
         <div className="rounded-2xl border p-5" style={{ backgroundColor: "var(--color-bg-elevated)" }}>
           <div className="flex items-center justify-between gap-2 mb-3">
             <div className="flex items-center gap-2">
               <FileText size={15} style={{ color: "var(--color-text-tertiary)" }} />
-              <span className="text-xs font-mono" style={{ color: "var(--color-text-tertiary)" }}>email_body.txt / .eml / .docx</span>
+              <span className="text-xs font-mono" style={{ color: "var(--color-text-tertiary)" }}>.txt / .eml / .docx / .pdf</span>
             </div>
             <label className="focus-ring inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors hover:opacity-80" style={{ borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }}>
               <Upload size={12} />
               Upload file
-              <input type="file" accept=".eml,.txt,.docx,message/rfc822" className="sr-only" onChange={handleFileUpload} />
+              <input type="file" accept=".eml,.txt,.msg,.mbox,.docx,.pdf,message/rfc822,application/pdf" className="sr-only" onChange={handleFileUpload} />
             </label>
           </div>
 
@@ -551,6 +724,50 @@ export default function EmailAnalysis() {
           </AnimatePresence>
         </div>
       </div>
+      )} {/* end paste tab */}
+
+      {/* ── GMAIL TAB ──────────────────────────────────────────── */}
+      {activeTab === "gmail" && (
+        <div className="grid gap-6 lg:grid-cols-[380px_1fr] lg:items-start">
+          {/* Left: connect panel */}
+          <div className="space-y-4">
+            <GmailConnect onStatusChange={setGmailConnected} />
+            {!gmailConnected && (
+              <div
+                className="rounded-2xl border p-4 text-xs leading-relaxed space-y-2"
+                style={{ backgroundColor: "var(--color-bg-elevated)", color: "var(--color-text-secondary)" }}
+              >
+                <p className="font-semibold" style={{ color: "var(--color-text-primary)" }}>How it works</p>
+                <p>1. Click <strong>Connect Gmail</strong> — you'll be taken to Google's consent page.</p>
+                <p>2. Grant read-only access. PsychShield cannot send, delete, or modify any emails.</p>
+                <p>3. Return here and click <strong>Scan Inbox</strong> to run the full detection pipeline on your recent emails.</p>
+                <p>4. Results are sorted by risk score and saved to your Dashboard.</p>
+                <p className="pt-1" style={{ color: "var(--color-text-tertiary)" }}>
+                  Requires a Google Cloud project with the Gmail API enabled and your redirect URI registered.
+                  Set <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> in <code>backend/.env</code>.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Right: scan panel (only when connected) */}
+          <div>
+            {gmailConnected
+              ? <GmailScanPanel />
+              : (
+                <div
+                  className="flex h-64 items-center justify-center rounded-2xl border border-dashed"
+                  style={{ borderColor: "var(--color-border)" }}
+                >
+                  <p className="text-sm" style={{ color: "var(--color-text-tertiary)" }}>
+                    Connect Gmail to start scanning your inbox.
+                  </p>
+                </div>
+              )
+            }
+          </div>
+        </div>
+      )} {/* end gmail tab */}
     </div>
   );
 }

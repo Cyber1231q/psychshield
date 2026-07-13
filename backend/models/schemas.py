@@ -81,6 +81,13 @@ class EmailAnalysisRequest(BaseModel):
     sender: Optional[str] = Field(default=None, max_length=254)
 
 
+class BatchEmailAnalysisRequest(BaseModel):
+    """POST /api/analyze-emails request body — one document containing
+    multiple emails, split and analyzed server-side as separate entities."""
+
+    document: str = Field(min_length=1, max_length=500_000)
+
+
 # ── Response Schemas ─────────────────────────────────────────────
 
 class EmotionCategoryScore(BaseModel):
@@ -131,6 +138,7 @@ class LinkVerificationResult(BaseModel):
     model: str
     linkScore: float
     urls: List[URLFlag]
+    linkReason: Optional[str] = None
     model_config = ConfigDict(populate_by_name=True)
 
 
@@ -166,6 +174,7 @@ class RiskReport(BaseModel):
     finalScore: int
     tier: str
     explanation: str
+    scoreReason: Optional[str] = None
     model_config = ConfigDict(populate_by_name=True)
 
 
@@ -186,6 +195,14 @@ class AnalysisResult(BaseModel):
     riskReport: RiskReport
     senderVerification: Optional[SenderVerification] = None
     model_config = ConfigDict(populate_by_name=True)
+
+
+class BatchEmailAnalysisResult(BaseModel):
+    """POST /api/analyze-emails response — one AnalysisResult per email
+    detected in the submitted document."""
+
+    count: int
+    results: List[AnalysisResult]
 
 
 class EmailListItem(BaseModel):

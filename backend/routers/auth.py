@@ -11,7 +11,6 @@ import logging
 import os
 import secrets
 import uuid
-from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -22,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from models.database import get_db
 from models.entities import AuditLog, PasswordResetToken, User
+from utils import rate_limiter
 import urllib.request
 import json as json_mod
 
@@ -55,8 +55,9 @@ JWT_ALGORITHM: str = "HS256"
 JWT_EXPIRY_HOURS: int = int(os.getenv("JWT_EXPIRY_HOURS", "8"))
 
 # ── A04: Rate limiting for brute-force protection ───────────────
+# Backed by Redis when REDIS_URL is set (shared across instances), an
+# in-memory dict otherwise — see utils/rate_limiter.py.
 
-_LOGIN_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
 _MAX_LOGIN_ATTEMPTS: int = 5
 _MAX_GENERAL_ATTEMPTS: int = 15
 _WINDOW_SECONDS: int = 300
@@ -64,24 +65,14 @@ _WINDOW_SECONDS: int = 300
 
 def _check_rate_limit(identifier: str) -> None:
     """Block if too many attempts in _WINDOW_SECONDS."""
-    now = datetime.now(timezone.utc).timestamp()
-    window_start = now - _WINDOW_SECONDS
-    attempts = _LOGIN_ATTEMPTS[identifier]
-    _LOGIN_ATTEMPTS[identifier] = [t for t in attempts if t > window_start]
     is_login = not identifier.startswith(("register:", "google:"))
     limit = _MAX_LOGIN_ATTEMPTS if is_login else _MAX_GENERAL_ATTEMPTS
-    if len(_LOGIN_ATTEMPTS[identifier]) >= limit:
-        raise HTTPException(
-            status_code=429,
-            detail="Too many attempts. Try again in 5 minutes.",
-        )
+    rate_limiter.check(identifier, limit, _WINDOW_SECONDS)
 
 
 def _record_attempt(identifier: str) -> None:
     """Record a login attempt timestamp."""
-    _LOGIN_ATTEMPTS[identifier].append(
-        datetime.now(timezone.utc).timestamp()
-    )
+    rate_limiter.record(identifier, _WINDOW_SECONDS)
 
 
 # ── Password helpers ────────────────────────────────────────────
@@ -158,7 +149,7 @@ def login(
     user.last_login = datetime.now(timezone.utc)
     db.commit()
 
-    _LOGIN_ATTEMPTS.pop(rate_key, None)
+    rate_limiter.clear(rate_key)
 
     token = create_token({"sub": user.email, "role": user.role, "name": user.name})
     _log_audit(db, user.email, "Login successful")
@@ -266,22 +257,16 @@ def google_auth(
 
 # ── Password reset helpers ─────────────────────────────────────
 
-_RESET_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
 _RESET_RATE_LIMIT_WINDOW: int = 300
 _RESET_RATE_LIMIT_MAX: int = 3
 
 
 def _check_reset_rate_limit(email: str) -> bool:
     """Return True if allowed, False if rate-limited."""
-    now = datetime.now(timezone.utc).timestamp()
-    key = email.lower().strip()
-    _RESET_ATTEMPTS[key] = [
-        t for t in _RESET_ATTEMPTS[key]
-        if now - t < _RESET_RATE_LIMIT_WINDOW
-    ]
-    if len(_RESET_ATTEMPTS[key]) >= _RESET_RATE_LIMIT_MAX:
+    key = f"reset:{email.lower().strip()}"
+    if not rate_limiter.check_bool(key, _RESET_RATE_LIMIT_MAX, _RESET_RATE_LIMIT_WINDOW):
         return False
-    _RESET_ATTEMPTS[key].append(now)
+    rate_limiter.record(key, _RESET_RATE_LIMIT_WINDOW)
     return True
 
 

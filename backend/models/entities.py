@@ -87,6 +87,20 @@ class AuditLog(Base):
     action: str = Column(Text, nullable=False)
 
 
+class GmailToken(Base):
+    """Encrypted Gmail OAuth credentials — one row per user."""
+
+    __tablename__ = "gmail_tokens"
+
+    id: str = Column(String, primary_key=True)
+    user_email: str = Column(String, unique=True, nullable=False, index=True)
+    encrypted_blob: str = Column(Text, nullable=False)
+    connected_at: datetime = Column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    last_used: datetime | None = Column(DateTime, nullable=True)
+
+
 class PasswordResetToken(Base):
     """Time-limited, single-use token for password resets."""
 

@@ -136,6 +136,65 @@ def test_analyze_body_too_large_rejected():
     assert response.status_code == 422
 
 
+def test_analyze_emails_requires_auth():
+    response = client.post("/api/analyze-emails", json={"document": "test"})
+    assert response.status_code == 401
+
+
+def test_analyze_emails_splits_document_into_separate_entities():
+    """A document with three 'From:'-delimited emails must come back as
+    three separate results, each with its own sender — not one blob with
+    sender="Unknown", which is what a direct API call used to get before
+    document splitting existed server-side."""
+    headers = _register_and_login()
+    document = (
+        "From: alice@example.com\nSubject: Urgent\n\n"
+        "URGENT: verify your account immediately or it will be closed.\n"
+        "---\n"
+        "From: bob@example.com\nSubject: Invoice\n\n"
+        "Payment is overdue, please act now to avoid penalties.\n"
+        "---\n"
+        "From: carol@example.com\n\n"
+        "Third message with a different sender entirely.\n"
+    )
+    response = client.post(
+        "/api/analyze-emails",
+        json={"document": document},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["count"] == 3
+    senders = {r["sender"] for r in data["results"]}
+    assert senders == {"alice@example.com", "bob@example.com", "carol@example.com"}
+    for result in data["results"]:
+        assert "riskScore" in result
+        assert result["riskTier"] in ("High", "Medium", "Low")
+
+
+def test_analyze_emails_single_email_document_returns_one_result():
+    headers = _register_and_login()
+    response = client.post(
+        "/api/analyze-emails",
+        json={"document": "Just one plain email with no headers at all."},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["count"] == 1
+    assert data["results"][0]["sender"] == ""
+
+
+def test_analyze_emails_document_too_large_rejected():
+    headers = _register_and_login()
+    response = client.post(
+        "/api/analyze-emails",
+        json={"document": "x" * 600_000},
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
 def test_emails_list_requires_auth():
     response = client.get("/api/emails")
     assert response.status_code == 401

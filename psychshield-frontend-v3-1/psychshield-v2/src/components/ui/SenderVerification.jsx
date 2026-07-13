@@ -3,6 +3,7 @@ import { ShieldCheck, ShieldX, AlertTriangle, User } from "lucide-react";
 function StatusPill({ status }) {
   const map = {
     PASS: { bg: "var(--color-risk-low-soft)", fg: "var(--color-risk-low)", label: "PASS" },
+    RESOLVES: { bg: "var(--color-bg-sunken)", fg: "var(--color-text-tertiary)", label: "RESOLVES" },
     FAIL: { bg: "var(--color-risk-high-soft)", fg: "var(--color-risk-high)", label: "FAIL" },
     UNKNOWN: { bg: "var(--color-bg-sunken)", fg: "var(--color-text-tertiary)", label: "UNKNOWN" },
     SUSPICIOUS: { bg: "var(--color-risk-medium-soft)", fg: "var(--color-risk-medium)", label: "SUSPICIOUS" },
@@ -56,11 +57,11 @@ export default function SenderVerification({ sender }) {
         <Row label="From" value={sender.from} />
         <Row label="Display name" value={sender.displayName} />
         {sender.replyTo && <Row label="Reply-To" value={sender.replyTo} status={sender.replyTo !== sender.from ? "SUSPICIOUS" : "PASS"} />}
-        <Row label="Domain" value={sender.domain} status={sender.typosquatted ? "SUSPICIOUS" : "PASS"} />
+        <Row label="Domain" value={sender.domain} status={sender.typosquatted ? "SUSPICIOUS" : "RESOLVES"} />
         <Row label="SPF" status={sender.spf} />
         <Row label="DKIM" status={sender.dkim} />
         <Row label="DMARC" status={sender.dmarc} />
-        {sender.domainAgeDays !== undefined && (
+        {sender.domainAgeDays != null && (
           <Row
             label="Domain age"
             value={sender.domainAgeDays < 30 ? `${sender.domainAgeDays} days — newly registered` : `${sender.domainAgeDays} days`}

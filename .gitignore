@@ -9,13 +9,30 @@ build/
 .eggs/
 venv/
 env/
-.env
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 *.sqlite3
 
 # Node
 node_modules/
-.env.local
+
+# Env files — ignore every variant (.env, .env.local, .env.production, ...)
+# but keep the checked-in .example templates tracked.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Secrets / credentials (defense-in-depth — none currently present, but a
+# stray download or export should never be one `git add .` away from GitHub)
+*.pem
+*.key
+*.p12
+*.pfx
+client_secret*.json
+*serviceaccount*.json
 
 # Claude Code
 CLAUDE.md
