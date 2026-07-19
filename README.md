@@ -28,32 +28,32 @@ threats hitting their organisation, not just block them silently.
 You paste an email, upload a file, or connect a Gmail inbox, and the 
 system runs it through four detection modules at the same time:
 
-Emotion detection — trained on 43,410 samples from Google's 
+Emotion detection: trained on 43,410 samples from Google's 
 GoEmotions dataset using TF-IDF and LinearSVC. It scores five 
 psychological triggers: Urgency, Fear, Authority, Trust, and Pity. 
 Achieved 91.05% accuracy on the test set.
 
-Manipulation pattern detection — weighted regex categories covering 
+Manipulation pattern detection: weighted regex categories covering 
 techniques like artificial time pressure, threat of loss, authority 
 impersonation, Business Email Compromise patterns, lottery scams, 
 and more.
 
-Link verification — checks every URL against verified phishing URLs 
+Link verification: checks every URL against verified phishing URLs 
 from PhishTank and runs structural analysis to catch typosquatting 
 (detecting that paypa1.com is impersonating paypal.com), suspicious 
 domains, IP based hostnames, and dangerous TLDs.
 
-Sender verification — checks whether the sender's domain is 
+Sender verification: checks whether the sender's domain is 
 impersonating a known brand, and grades SPF, DKIM, and DMARC 
 against real evidence rather than guessing. A Gmail scan reads 
-Google's own delivery verdict straight from the message headers; 
-a pasted or uploaded email gets a live DNS lookup plus a WHOIS 
-domain-age check instead, since there's no delivery envelope to 
-read. Where something genuinely can't be verified (DKIM needs the 
-message's raw signed bytes, which a bare sender address doesn't 
-have), it's reported as unverifiable rather than faked.
+Google's own delivery verdict straight from the message headers, 
+while a pasted or uploaded email gets a live DNS lookup plus a 
+WHOIS domain-age check instead, since there's no delivery envelope 
+to read. Where something genuinely can't be verified (DKIM needs 
+the message's raw signed bytes, which a bare sender address 
+doesn't have), it's reported as unverifiable rather than faked.
 
-Risk scoring — combines all four signals into a score from 0 to 
+Risk scoring: combines all four signals into a score from 0 to 
 100 with a HIGH, MEDIUM, or LOW classification and a written 
 explanation. The weights adapt to whichever signals are actually 
 available for a given email, so a plain paste with no sender still 
@@ -80,11 +80,12 @@ The emotion model accuracy above is unchanged from the original
 GoEmotions-trained model. The end-to-end pipeline accuracy figure 
 I previously reported (96.99%) was measured against an earlier 
 version of the risk-scoring formula and hasn't been re-measured 
-since — the weights changed and a fourth signal (Sender) was added, 
-so I'd rather not restate a number I can't currently stand behind. 
-Re-running `evaluation/evaluate_model.py` against the current 
-formula (once the PhishTank/Enron datasets are populated locally — 
-see Limitations) is on my list before citing a new figure.
+since, because the weights changed and a fourth signal (Sender) 
+was added, so I'd rather not restate a number I can't currently 
+stand behind. Re-running `evaluation/evaluate_model.py` against 
+the current formula (once the PhishTank/Enron datasets are 
+populated locally, see Limitations) is on my list before citing 
+a new figure.
 
 It correctly catches PayPal phishing, Microsoft credential harvests, 
 CEO wire fraud, WhatsApp scams, Netflix billing scams, Nigerian 
@@ -105,7 +106,7 @@ you miss that entirely.
 The fourth signal, Sender, checks whether the sender's domain is 
 impersonating a known brand and whether it actually passes SPF, 
 DKIM, and DMARC. It's deliberately the smallest weight (15%) 
-because it's supporting evidence, not the main signal — and when 
+because it's supporting evidence, not the main signal, and when 
 no sender address is available at all (a plain paste with no 
 "From:" line), that 15% doesn't just get lost: the other three 
 weights renormalize to fill the full 100%, so a content-only 
@@ -118,7 +119,7 @@ given in the first place.
 Paste email text, upload a file (.eml, .txt, .msg, .mbox, .docx, .pdf), 
 or connect a Gmail inbox (read-only) for instant analysis
 
-Bulk email analysis — one document containing several emails gets 
+Bulk email analysis: one document containing several emails gets 
 split into separate sender+content entities and scored individually, 
 either in the browser or through a dedicated batch API endpoint
 
@@ -246,13 +247,13 @@ integration would improve detection of very recent threats.
 
 DKIM can only be verified for Gmail-scanned emails, where a live 
 API fetch gives a real per-message verdict straight from Google. 
-For a pasted or uploaded email there's no way to safely verify it 
-— the raw signed message bytes a DKIM check needs simply don't 
+For a pasted or uploaded email there's no way to safely verify it: 
+the raw signed message bytes a DKIM check needs simply don't 
 exist for a bare sender address, and trusting a claimed header in 
 arbitrary uploaded text would be trivially spoofable. It's 
 reported as unverifiable rather than faked.
 
-There's no file-upload endpoint on the backend by design — all 
+There's no file-upload endpoint on the backend, by design. All 
 parsing happens client-side, which keeps the server's attack 
 surface small at the cost of that logic only running in a browser.
 
